@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "LQR balancer ESP32",
+			"path": "."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"cmath": "cpp"
+		}
+	}
+}
