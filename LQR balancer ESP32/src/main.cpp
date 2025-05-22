@@ -1,52 +1,23 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_MPU6050.h>
-#include <ArduinoEigenDense.h>
 #include "driver/ledc.h"
-using namespace Eigen;
-using namespace std;
 
-// Matrix2d A; // 2x2 double matrix
-// Matrix3f A; // 3x3 float matrix
-// Matrix3d B(3, 3); // Dynamic-sized matrix (3x3)
-// Vector3d v(1, 2, 3); // 3D vector with doubles
-
-// Matrix2d C = A + A; // Addition
-// Matrix2d D = A * A; // Multiplication
-// Matrix2d E = A.inverse(); // Inverse
-// double det = A.determinant(); // Determinant
-// Vector2d x = A.colPivHouseholderQr().solve(Vector2d(1, 2)); // Solving linear systems
-
-// MatrixXd I = MatrixXd::Identity(3, 3); // Identity matrix
-// MatrixXd Z = MatrixXd::Zero(3, 3); // Zero matrix
-// MatrixXd O = MatrixXd::Ones(3, 3); // Ones matrix
-
-// Accessing elements:
-// double val = A(0, 1); // Access element at row 0, col 1
-// A(1, 0) = 5.0; // Modify an element
+#include "EigenKalman.h"
+#include "EigenLQR.h"
+#include "printLinalg.h"
 
 // Declare function prototypes here:
-template <typename Derived>
-void printMatrix(const char* name, const Eigen::MatrixBase<Derived>& m);
-
-template <typename Derived>
-void printVector(const char* name, const Eigen::MatrixBase<Derived>& v);
-
 int readAngle(TwoWire &i2c, uint8_t addr, long &cumulativeAngle, int &lastAngle, long &initialAngle);
-
 void MotorControl(float voltage);
-
 void CalibrateIMU();
-
 VectorXf ReadIMU();
-
 void CompIMU();
-
 VectorXf CalcX();
 
-void ScanI2C();
-
 Adafruit_MPU6050 mpu;
+EigenKalmanFilter Balancer;
+EigenLQR LQR;
 
 #define SDA_1 21
 #define SCL_1 22
@@ -57,7 +28,6 @@ Adafruit_MPU6050 mpu;
 #define ANGLE_REG_MSB 0x0D  // High byte of angle
 
 TwoWire I2C_2 = TwoWire(1);  // Second I2C channel (custom pins)
-VectorXf imu_vals = VectorXf::Zero(2);
 
 int n = 4;          // Number of states
 int m = 2;          // Number of inputs
@@ -65,15 +35,7 @@ int p = 4;          // Number of outputs
 float Ts = 0.01;    // Sampling time
 
 // System parameters
-float Kt = 0.23, mu = 0.25, R = 3.5, M = 0.34, L = 0.04, r = 0.055/2, g = 9.82;
-
-// Using LQR with integral action requires an augmented model
-// This does not work atm. since the the augmeted model is not stable
-// To fix this one could choose to add poles to the augmented model.
-// Adding integral action seperately works fine.
-
-#define INTEGRAL_ACTION true    // Integral action for LQR
-#define FEED_FORWARD false      // For faster reference response
+float Kt = 0.02, R = 3.5, M = 0.34, L = 0.04, r = 0.055/2, g = 9.82;
 
 // Encoder readings
 long cumulativeAngleR = 0;
@@ -83,112 +45,6 @@ long initialAngleL = 0;
 int lastAngleR = 0;
 int lastAngleL = 0;
 
-class EigenKalmanFilter {
-    public:
-        // System dimensions (default)
-        int n = 4;          // Number of states
-        int m = 2;          // Number of inputs
-        int p = 4;          // Number of outputs
-        float Ts = 0.01;    // Sampling time
-
-        // Kalman state matricies
-        MatrixXf A = MatrixXf::Zero(n, n);            // Transition matrix
-        MatrixXf B = MatrixXf::Zero(n, m);            // Input matrix
-        MatrixXf C = MatrixXf::Zero(p, n);            // Measurement model
-        MatrixXf A_d = MatrixXf::Zero(n, n);          // Discretized transition matrix
-        MatrixXf B_d = MatrixXf::Zero(n, m);          // Discretized input matrix
-        MatrixXf K = MatrixXf::Zero(n, p);            // Kalman gain
-        MatrixXf I = MatrixXf::Identity(n, n);
-
-        // Covariances
-        MatrixXf Q = MatrixXf::Zero(n, n);            // Process noise covariance
-        MatrixXf R = MatrixXf::Zero(p, p);            // Measurement noise covariance
-        MatrixXf P = MatrixXf::Zero(n, n);            // Estimation error covariance
-        MatrixXf P_pred = MatrixXf::Zero(n, n);       // Predicted estimation error covariance    
-
-        VectorXf x_prior = VectorXf::Zero(n);         // State prior/last estimated state x_k-1/k-1 
-        VectorXf x_pred = VectorXf::Zero(n);          // Predicted state x_k/k-1
-        VectorXf x = VectorXf::Zero(n);               // State estimate/ posterior x_k/k
-        VectorXf u_prev = VectorXf::Zero(m);          // Previous input
-        VectorXf v = VectorXf::Zero(p);               // Innovation
-        MatrixXf S = MatrixXf::Zero(p, p);            // Innovation covariance
-
-
-        void discretize_state_matricies(){
-            // Discretization (Taylor series)
-            MatrixXf Psi = MatrixXf::Zero(n,n);
-            
-            Psi = I * Ts + (A*(pow(Ts,2) / 2)) + (A*A*(pow(Ts,3) / 6)) + (A*A*A*(pow(Ts,4) / 24)) + (A*A*A*A*(pow(Ts,5) / 120));
-            A_d = I + A * Psi;
-            B_d = Psi * B;
-        }
-
-        void kalman_filter(VectorXf y){
-            // Called each sampling interval Ts
-            // Predicts the next state from prior states and previous input u
-            x_pred = A_d*x_prior + B_d*u_prev;
-            P_pred = A_d*P*A_d.transpose() + Q;
-
-            // Update state with measurement y
-            v = y - C*x_pred;
-            S = C*P_pred*C.transpose() + R;
-            K = P_pred*C.transpose()*S.inverse();
-            P = P_pred - K*S*K.transpose();         // Reduced P_pred with measurement
-
-            x = x_pred + K*v;                       // Corrected state estimate
-
-            // for next iteration
-            x_prior = x;
-        }
-
-
-};
-
-class LinearQuadratic {
-    public:
-        // System dimensions (default)
-        int n = 4;          // Number of states A_d.rows(),
-        int m = 2;          // Number of inputs B_d.cols(),
-        float Ts = 0.01;    // Sampling time
-
-        // LQR Matrices
-        MatrixXf Q = MatrixXf::Zero(n, n);            // State weight matrix
-        MatrixXf R = MatrixXf::Zero(m, m);            // Input weight matrix
-        MatrixXf P = MatrixXf::Identity(n,n);                             // Riccati solution with inital guess
-        MatrixXf L = MatrixXf::Zero(m, n);            // LQR gain
-        VectorXf x_ref = VectorXf::Zero(n);           // Reference state
-
-        void init(const MatrixXf& A_d, const MatrixXf& B_d) {
-            // A_d and B_d are discretized state space matricies
-            // In some cases the Riccati solution might not converge,
-            // The LQR gain L will be zero, preventing state based input.
-
-            // Solve Discrete-time Algebraic Riccati Equation (DARE)
-            MatrixXf P_prev = MatrixXf::Zero(n, n);
-            float tolerance = 1;
-            int max_iterations = 1000;
-            int i = 0;
-
-            while ((P - P_prev).norm() > tolerance && i <= max_iterations) {
-                P_prev = P;
-
-                MatrixXf K = P*B_d*(R + B_d.transpose()*P*B_d).inverse();
-                P = Q + A_d.transpose()*(P - K*B_d.transpose()*P)*A_d;
-
-                if (i == max_iterations){
-                    Serial.println("The Riccati matrix P has not converged!");
-                }
-                i++;
-            };
-
-            // Compute LQR Gain: L = (R + B^T P B)^-1 B^T P A
-            L = (R + B_d.transpose()*P*B_d).inverse()*B_d.transpose()*P*A_d;
-            printMatrix("right", B_d.transpose()*P*A_d);
-            printMatrix("left", (R + B_d.transpose()*P*B_d).inverse());
-        }
-};
-
-
 // Motor control
 #define AIN1 18     // Direction pin 1
 #define AIN2 23     // Direction pin 2
@@ -197,15 +53,12 @@ class LinearQuadratic {
 #define STBY 19     // Standby pin, on when high
 
 // PWM settings
-#define PWM_FREQ 1000   // 5 kHz PWM frequency
-#define PWM_RESOLUTION 8 // 8-bit resolution (0-255)
+#define PWM_FREQ 1000
+#define PWM_RESOLUTION 10
 #define PWM_CHANNEL_A1 0
 #define PWM_CHANNEL_A2 1
 #define PWM_CHANNEL_B1 2
 #define PWM_CHANNEL_B2 3
-
-EigenKalmanFilter Balancer;
-LinearQuadratic LQR;
 
 void setup() {
     Serial.begin(115200);
@@ -225,7 +78,7 @@ void setup() {
     Balancer.A << 0, 1, 0, 0,
                   g / L, 0, 0, 0,
                   0, 0, 0, 1,
-                 -g, 0, 0, -mu / (M*R*r);
+                 -g, 0, 0, 0;
 
     Balancer.B << 0, 0,
                  -Kt / (R*M*L*L), -Kt / (R*M*L*L),
@@ -235,33 +88,31 @@ void setup() {
     Balancer.C = MatrixXf::Identity(p, p);
 
     // Weight Matrices
-    LQR.Q << 10000, 0, 0, 0,
-             0, 0, 0, 0,
-             0, 0, 0.001, 0,
-             0, 0, 0, 0; // How much do we penalize error in each state?
+    LQR.Q << 100, 0, 0, 0,
+             0, 0.01, 0, 0,
+             0, 0, 100, 0,
+             0, 0, 0, 0.1;
 
-    LQR.R = 0.0001 * MatrixXf::Identity(m, m);
-    LQR.x_ref << 0, 0, 0, 0;
+    LQR.R = 0.01 * MatrixXf::Identity(m, m);
+    LQR.x_ref << 0, 0, 0, 0; 
 
     Balancer.discretize_state_matricies(); // creates A_d and B_d
     LQR.init(Balancer.A_d, Balancer.B_d);
 
-    Balancer.Q << 10, 0, 0, 0,
-                  0, 10, 0, 0,
-                  0, 0, 10, 0,
-                  0, 0, 0, 10; // Process noise covariance
+    Balancer.Q << 0.075, 0, 0, 0,
+                  0, 0.075, 0, 0,
+                  0, 0, 0.025, 0,
+                  0, 0, 0, 0.025;
 
     Balancer.R << 0.01, 0, 0, 0,
                   0, 0.01, 0, 0,
-                  0, 0, 0.001, 0,
-                  0, 0, 0, 0.001;
+                  0, 0, 0.01, 0,
+                  0, 0, 0, 0.01;
 
     // Motor control
     // Initialize motor control pins as outputs
-    pinMode(AIN1, OUTPUT);
-    pinMode(AIN2, OUTPUT);
-    pinMode(BIN1, OUTPUT);
-    pinMode(BIN2, OUTPUT);
+    pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT);
+    pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT);
     pinMode(STBY, OUTPUT);
 
     // Initialize standby pin (to enable the motor driver)
@@ -315,11 +166,6 @@ void loop() {
         // Estimate current states
         Balancer.kalman_filter(y);
 
-        // Serial.print("Angle: "); Serial.print(Balancer.x(0), 3); Serial.print(" rate: "); Serial.print(Balancer.x(1), 3);
-        // Serial.print("x: "); Serial.print(Balancer.x(2), 3); Serial.print(" x_dot: "); Serial.println(Balancer.x(3), 3);
-        // Serial.print("Angle: "); Serial.print(y(0), 3); Serial.print(" rate: "); Serial.print(y(1), 3);
-        // Serial.print("x: "); Serial.print(y(2), 3); Serial.print(" x_dot: "); Serial.println(y(3), 3);
-
         // LQR
         VectorXf x_dev = Balancer.x - LQR.x_ref;
         VectorXf u = -LQR.L*x_dev;
@@ -338,12 +184,13 @@ void loop() {
 
 VectorXf ReadIMU(){
 
+    static VectorXf imu_vals = VectorXf::Zero(2);
     sensors_event_t a, G, temp;
     mpu.getEvent(&a, &G, &temp);
 
     static float gyro_ang = 0;
 
-    float x_offset = 0.5, z_offset = 0.295, gyro_offset = 0.0351;
+    float x_offset = 0.2, z_offset = 0.3, gyro_offset = 0.035;
 
     float gravity_x = -a.acceleration.x + x_offset;
     float gravity_z = -a.acceleration.z - z_offset;
@@ -351,13 +198,12 @@ VectorXf ReadIMU(){
     float trig_ang = atan2(gravity_x, gravity_z);
 
     // Complementary filter
-    float gamma = 0.85;
+    float gamma = 0.98;
     float ang_vel = -(G.gyro.y - gyro_offset);
     gyro_ang += Ts*ang_vel;
     gyro_ang = gamma*gyro_ang + (1 - gamma)*trig_ang;
 
-    imu_vals << gyro_ang, ang_vel; // z = [angle, angular velocity] from gyroscope data
-    // Serial.print("Angle: "); Serial.println(gyro_ang);
+    imu_vals << gyro_ang, ang_vel;
     return imu_vals;
 }
 
@@ -487,10 +333,10 @@ VectorXf CalcX() {
 }
 
 void MotorControl(float voltage) {
-    int pwmValue = abs(voltage) * 255 / 8.4; // 8.4V is the maximum voltage
-    pwmValue = constrain(pwmValue, 0, 255);
+    int pwmValue = abs(voltage) * 1024 / 7.6; // 8.4V is the maximum voltage
+    pwmValue = constrain(pwmValue, 0, 1024);
 
-    Serial.print("PWM: "); Serial.println(pwmValue);
+    // Serial.print("PWM: "); Serial.println(pwmValue);
 
     if (voltage > 0) {
         ledcWrite(PWM_CHANNEL_A1, pwmValue);  // Forward
@@ -513,38 +359,4 @@ void MotorControl(float voltage) {
         ledcWrite(PWM_CHANNEL_B1, 0);
         ledcWrite(PWM_CHANNEL_B2, 0);  // Stop
     }
-}
-
-// Print matrix
-template <typename Derived>
-void printMatrix(const char* name, const Eigen::MatrixBase<Derived>& m) {
-    Serial.print(name);
-    Serial.print(" (");
-    Serial.print(m.rows());
-    Serial.print("x");
-    Serial.print(m.cols());
-    Serial.println("):");
-
-    for (int i = 0; i < m.rows(); ++i) {
-        for (int j = 0; j < m.cols(); ++j) {
-            Serial.print(m(i, j));
-            Serial.print(" ");
-        }
-        Serial.println();
-    }
-    Serial.println();
-}
-
-// Print vector
-template <typename Derived>
-void printVector(const char* name, const Eigen::MatrixBase<Derived>& v) {
-    Serial.print(name);
-    Serial.print(" (");
-    Serial.print(v.size());
-    Serial.println("):");
-
-    for (int i = 0; i < v.size(); ++i) {
-        Serial.println(v(i));
-    }
-    Serial.println();
 }
