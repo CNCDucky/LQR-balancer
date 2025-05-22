@@ -35,7 +35,7 @@ int p = 4;          // Number of outputs
 float Ts = 0.01;    // Sampling time
 
 // System parameters
-float Kt = 0.02, R = 3.5, M = 0.34, L = 0.04, r = 0.055/2, g = 9.82;
+float Kt = 0.003, R = 3.5, M = 0.34, L = 0.04, r = 0.055/2, g = 9.82;
 
 // Encoder readings
 long cumulativeAngleR = 0;
@@ -53,7 +53,7 @@ int lastAngleL = 0;
 #define STBY 19     // Standby pin, on when high
 
 // PWM settings
-#define PWM_FREQ 1000
+#define PWM_FREQ 20000
 #define PWM_RESOLUTION 10
 #define PWM_CHANNEL_A1 0
 #define PWM_CHANNEL_A2 1
@@ -89,9 +89,9 @@ void setup() {
 
     // Weight Matrices
     LQR.Q << 100, 0, 0, 0,
-             0, 0.01, 0, 0,
+             0, 1, 0, 0,
              0, 0, 100, 0,
-             0, 0, 0, 0.1;
+             0, 0, 0, 100;
 
     LQR.R = 0.01 * MatrixXf::Identity(m, m);
     LQR.x_ref << 0, 0, 0, 0; 
@@ -99,10 +99,10 @@ void setup() {
     Balancer.discretize_state_matricies(); // creates A_d and B_d
     LQR.init(Balancer.A_d, Balancer.B_d);
 
-    Balancer.Q << 0.075, 0, 0, 0,
-                  0, 0.075, 0, 0,
-                  0, 0, 0.025, 0,
-                  0, 0, 0, 0.025;
+    Balancer.Q << 0.05, 0, 0, 0,
+                  0, 0.05, 0, 0,
+                  0, 0, 0.05, 0,
+                  0, 0, 0, 0.05;
 
     Balancer.R << 0.01, 0, 0, 0,
                   0, 0.01, 0, 0,
@@ -139,7 +139,7 @@ void setup() {
     printMatrix("Q LQR", LQR.Q);
     printMatrix("R LQR", LQR.R);
     printMatrix("Riccati solution (P)", LQR.P);
-    printMatrix("LQR Gain (Lq)", LQR.L);
+    printMatrix("LQR Gain", LQR.L);
 
     Serial.println("System Initialized.");
     Serial.println();
@@ -174,7 +174,7 @@ void loop() {
         Balancer.u_prev = u;
 
         // If falling over:
-        if (abs(IMU(0)) >= 1){ // rad
+        if (abs(IMU(2)) >= 1){ // rad
             u = VectorXf::Zero(m);;
         }
 
@@ -183,18 +183,16 @@ void loop() {
 }
 
 VectorXf ReadIMU(){
-
-    static VectorXf imu_vals = VectorXf::Zero(2);
+    static VectorXf imu_vals = VectorXf::Zero(3);
     sensors_event_t a, G, temp;
     mpu.getEvent(&a, &G, &temp);
 
     static float gyro_ang = 0;
 
-    float x_offset = 0.2, z_offset = 0.3, gyro_offset = 0.035;
+    float x_offset = 0.350, z_offset = 0.387, gyro_offset = -0.035;
 
     float gravity_x = -a.acceleration.x + x_offset;
     float gravity_z = -a.acceleration.z - z_offset;
-
     float trig_ang = atan2(gravity_x, gravity_z);
 
     // Complementary filter
@@ -203,7 +201,7 @@ VectorXf ReadIMU(){
     gyro_ang += Ts*ang_vel;
     gyro_ang = gamma*gyro_ang + (1 - gamma)*trig_ang;
 
-    imu_vals << gyro_ang, ang_vel;
+    imu_vals << gyro_ang, ang_vel, trig_ang;
     return imu_vals;
 }
 
@@ -236,46 +234,59 @@ int readAngle(TwoWire &i2c, uint8_t addr, long &cumulativeAngle, int &lastAngle,
 }
 
 void CalibrateIMU(){
-    Serial.println("Calibrating IMU...");
+    Serial.println("Calibrating IMU, assumed standing up");
 
     int n_samples = 100;
-    float angle_samples[n_samples] = {0};
-    float gyro_samples[n_samples] = {0};
+    float x_acc[n_samples] = {0}, z_acc[n_samples] = {0};
+    float gyro[n_samples] = {0};
+    float mean_x_acc = 0, mean_z_acc = 0, mean_gyro = 0;
+    float variance_z_acc = 0, variance_x_acc = 0, variance_gyro = 0;
 
-    float mean_angle = 0;
-    float mean_gyro = 0;
-
-    float variance_angle = 0;
-    float variance_gyro = 0;
-    VectorXf result = VectorXf::Zero(2);
-
+    sensors_event_t a, G, temp;
+    Ts = 0.01;
+    float x_offset = -0.350, z_offset = 0.387, gyro_offset = -0.035;
     for (int sample = 0; sample < n_samples; sample++) {
-        result = ReadIMU();
-        angle_samples[sample] = result(0);
-        gyro_samples[sample] = result(1);
+        delay(Ts*1000);
+        mpu.getEvent(&a, &G, &temp);
+        x_acc[sample] = a.acceleration.x + x_offset;
+        z_acc[sample] = a.acceleration.z + z_offset;
+        gyro[n_samples] = G.gyro.y + gyro_offset;
     }
 
     // Mean: sum(x) / n
     for (int sample = 0; sample < n_samples; sample++) {
-        mean_angle += angle_samples[sample];
-        mean_gyro += gyro_samples[sample];
+        mean_x_acc += x_acc[sample];
+        mean_z_acc += z_acc[sample];
+        mean_gyro += gyro[sample];
     }
-    mean_angle /= n_samples;
+    mean_x_acc /= n_samples;
+    mean_z_acc /= n_samples;
     mean_gyro /= n_samples;
 
     // Standard deviation: sqrt(sum((x - mean)^2) / (n-1)), variance = std_dev^2
     for (int sample = 0; sample < n_samples; sample++) {
-        variance_angle += pow(angle_samples[sample] - mean_angle, 2);
-        variance_gyro += pow(gyro_samples[sample] - mean_gyro, 2);
+        variance_z_acc += pow(x_acc[sample] - mean_x_acc, 2);
+        variance_x_acc += pow(z_acc[sample] - mean_z_acc, 2);
+        variance_gyro += pow(gyro[sample] - mean_gyro, 2);
     }  
-    variance_angle /= (n_samples - 1);
+    variance_z_acc /= (n_samples - 1);
+    variance_x_acc /= (n_samples - 1);
     variance_gyro /= (n_samples - 1);
 
-    Serial.print("Mean gyro: "); Serial.println(mean_gyro, 8);
-    Serial.print("Variance gyro: "); Serial.println(variance_gyro, 8);
+    Serial.print("Mean x acc: "); Serial.println(mean_x_acc, 8);
+    Serial.print("Variance: "); Serial.println(variance_x_acc, 8);
+    Serial.print("offset:"); Serial.println(-mean_x_acc, 8);
+    Serial.println("");
+    Serial.print("Mean z acc: "); Serial.println(mean_z_acc, 8);
+    Serial.print("Variance: "); Serial.println(variance_z_acc, 8);
+    Serial.print("offset: "); Serial.println(-(g + mean_z_acc), 8);
 
-    Serial.print("Mean angle: "); Serial.println(mean_angle, 8);
-    Serial.print("Variance angle: "); Serial.println(variance_angle, 8);
+    /*
+    Mean x acc: -9.42101574
+    Variance: 0.00239385
+    Mean z acc: -0.23300368
+    Variance: 0.00101341
+    */
 
     // Laying flat on the table
     // Mean x: -9.5008
@@ -292,11 +303,6 @@ void CalibrateIMU(){
     // Variance gyro: 0.0200
     // Mean acc_angle: -0.0084
     // Variance acc_angle: 0.0199
-
-    // After input into filter
-    // Variance gyro: 0.00006533
-    // Variance angle: 0.00001489
-
     while (true){}
 }
 
@@ -323,7 +329,7 @@ VectorXf CalcX() {
 
     float x_vel = (velR + velL) / 2;
 
-    //Serial.print("x pos: "); Serial.println(x_pos);
+    Serial.print("x pos: "); Serial.println(x_pos);
     //Serial.print("x vel: "); Serial.println(x_vel);
 
     VectorXf x = VectorXf::Zero(2);
