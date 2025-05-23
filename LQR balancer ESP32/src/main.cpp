@@ -35,7 +35,7 @@ int p = 4;          // Number of outputs
 float Ts = 0.01;    // Sampling time
 
 // System parameters
-float Kt = 0.003, R = 3.5, M = 0.34, L = 0.04, r = 0.055/2, g = 9.82;
+float Kt = 0.005, R = 3.5, M = 0.34, L = 0.04, r = 0.055/2, g = 9.82;
 
 // Encoder readings
 long cumulativeAngleR = 0;
@@ -89,9 +89,9 @@ void setup() {
 
     // Weight Matrices
     LQR.Q << 100, 0, 0, 0,
-             0, 1, 0, 0,
+             0, 0.01, 0, 0,
              0, 0, 100, 0,
-             0, 0, 0, 100;
+             0, 0, 0, 1;
 
     LQR.R = 0.01 * MatrixXf::Identity(m, m);
     LQR.x_ref << 0, 0, 0, 0; 
@@ -99,8 +99,8 @@ void setup() {
     Balancer.discretize_state_matricies(); // creates A_d and B_d
     LQR.init(Balancer.A_d, Balancer.B_d);
 
-    Balancer.Q << 0.05, 0, 0, 0,
-                  0, 0.05, 0, 0,
+    Balancer.Q << 0.1, 0, 0, 0,
+                  0, 0.1, 0, 0,
                   0, 0, 0.05, 0,
                   0, 0, 0, 0.05;
 
@@ -243,7 +243,6 @@ void CalibrateIMU(){
     float variance_z_acc = 0, variance_x_acc = 0, variance_gyro = 0;
 
     sensors_event_t a, G, temp;
-    Ts = 0.01;
     float x_offset = -0.350, z_offset = 0.387, gyro_offset = -0.035;
     for (int sample = 0; sample < n_samples; sample++) {
         delay(Ts*1000);
@@ -316,21 +315,22 @@ VectorXf CalcX() {
     int angleL = readAngle(I2C_2, AS5600_ADDR, cumulativeAngleL, lastAngleL, initialAngleL);  // Left encoder
 
     float radAngleR = angleR * 2*PI/4096;
-    float angularVelR = (radAngleR - lastRadAngleR) / Ts;
-    float velR = angularVelR * r;
-    lastRadAngleR = radAngleR;
-
     float radAngleL = angleL * 2*PI/4096;
+
+    float angularVelR = (radAngleR - lastRadAngleR) / Ts;
     float angularVelL = (radAngleL - lastRadAngleL) / Ts;
-    float velL = -angularVelL * r; // Negative sign due to encoder orientation
+    lastRadAngleR = radAngleR;
     lastRadAngleL = radAngleL;
+
+    float velR = angularVelR * r;
+    float velL = -angularVelL * r; // Negative sign due to encoder orientation
+
 
     float x_pos = (radAngleR - radAngleL)*r/2; // Negative sign due to encoder orientation
 
     float x_vel = (velR + velL) / 2;
 
     Serial.print("x pos: "); Serial.println(x_pos);
-    //Serial.print("x vel: "); Serial.println(x_vel);
 
     VectorXf x = VectorXf::Zero(2);
     x << x_pos, x_vel;
