@@ -35,7 +35,7 @@ int p = 4;          // Number of outputs
 float Ts = 0.01;    // Sampling time
 
 // System parameters
-float Kt = 0.005, R = 3.5, M = 0.34, L = 0.04, r = 0.055/2, g = 9.82;
+float Kt = 0.01, Rr = 3.5, Rl = 4.5, M = 0.34, L = 0.04, r = 0.055/2, g = 9.82;
 
 // Encoder readings
 long cumulativeAngleR = 0;
@@ -81,9 +81,9 @@ void setup() {
                  -g, 0, 0, 0;
 
     Balancer.B << 0, 0,
-                 -Kt / (R*M*L*L), -Kt / (R*M*L*L),
+                 -Kt / (Rr*M*L*L), -Kt / (Rl*M*L*L),
                  0, 0,
-                 Kt / (M*R*r),  Kt / (M*R*r);
+                 Kt / (M*Rr*r),  Kt / (M*Rl*r);
 
     Balancer.C = MatrixXf::Identity(p, p);
 
@@ -99,10 +99,10 @@ void setup() {
     Balancer.discretize_state_matricies(); // creates A_d and B_d
     LQR.init(Balancer.A_d, Balancer.B_d);
 
-    Balancer.Q << 0.1, 0, 0, 0,
-                  0, 0.1, 0, 0,
-                  0, 0, 0.05, 0,
-                  0, 0, 0, 0.05;
+    Balancer.Q << 0.02, 0, 0, 0,
+                  0, 0.02, 0, 0,
+                  0, 0, 10, 0,
+                  0, 0, 0, 10;
 
     Balancer.R << 0.01, 0, 0, 0,
                   0, 0.01, 0, 0,
@@ -151,6 +151,7 @@ void loop() {
 
     unsigned static long lastTime;
     unsigned long currentTime = millis();
+    static float pos = 0;
 
     if (currentTime - lastTime >= Ts * 1000) {  // Total loop time ~6ms icl serial print
         lastTime = currentTime;
@@ -165,6 +166,10 @@ void loop() {
 
         // Estimate current states
         Balancer.kalman_filter(y);
+
+        LQR.x_ref << 0, 0, 0, 0; 
+
+        Serial.print(Balancer.x(2)); Serial.print(" "); Serial.println(Balancer.x(3));
 
         // LQR
         VectorXf x_dev = Balancer.x - LQR.x_ref;
@@ -187,7 +192,7 @@ VectorXf ReadIMU(){
     sensors_event_t a, G, temp;
     mpu.getEvent(&a, &G, &temp);
 
-    static float gyro_ang = 0;
+    static double gyro_ang = 0;
 
     float x_offset = 0.350, z_offset = 0.387, gyro_offset = -0.035;
 
@@ -196,7 +201,7 @@ VectorXf ReadIMU(){
     float trig_ang = atan2(gravity_x, gravity_z);
 
     // Complementary filter
-    float gamma = 0.98;
+    float gamma = 0.99;
     float ang_vel = -(G.gyro.y - gyro_offset);
     gyro_ang += Ts*ang_vel;
     gyro_ang = gamma*gyro_ang + (1 - gamma)*trig_ang;
@@ -323,14 +328,11 @@ VectorXf CalcX() {
     lastRadAngleL = radAngleL;
 
     float velR = angularVelR * r;
-    float velL = -angularVelL * r; // Negative sign due to encoder orientation
-
+    float velL = - angularVelL * r; // Negative sign due to encoder orientation
 
     float x_pos = (radAngleR - radAngleL)*r/2; // Negative sign due to encoder orientation
 
     float x_vel = (velR + velL) / 2;
-
-    Serial.print("x pos: "); Serial.println(x_pos);
 
     VectorXf x = VectorXf::Zero(2);
     x << x_pos, x_vel;
