@@ -8,7 +8,6 @@
 #include "printLinalg.h"
 
 // Declare function prototypes here:
-int readAngle(TwoWire &i2c, uint8_t addr, long &cumulativeAngle, int &lastAngle, long &initialAngle);
 void MotorControl(float voltage);
 void CalibrateIMU();
 VectorXf ReadIMU();
@@ -23,9 +22,6 @@ EigenLQR LQR;
 #define SCL_1 22
 #define SDA_2 14
 #define SCL_2 27
-#define AS5600_ADDR 0x36
-#define ANGLE_REG_LSB 0x0C  // Low byte of angle
-#define ANGLE_REG_MSB 0x0D  // High byte of angle
 
 TwoWire I2C_2 = TwoWire(1);  // Second I2C channel (custom pins)
 
@@ -36,14 +32,6 @@ float Ts = 0.01;    // Sampling time
 
 // System parameters
 float Kt = 0.005, R = 3.5, M = 0.34, L = 0.04, r = 0.055/2, g = 9.82;
-
-// Encoder readings
-long cumulativeAngleR = 0;
-long initialAngleR = 0;
-long cumulativeAngleL = 0;
-long initialAngleL = 0;
-int lastAngleR = 0;
-int lastAngleL = 0;
 
 // Motor control
 #define AIN1 18     // Direction pin 1
@@ -60,6 +48,74 @@ int lastAngleL = 0;
 #define PWM_CHANNEL_B1 2
 #define PWM_CHANNEL_B2 3
 
+class AS5600 {
+    private:
+        static const uint8_t AS5600_ADDR = 0x36;
+        static const uint8_t ANGLE_REG_LSB = 0x0C;
+        static const uint8_t ANGLE_REG_MSB = 0x0D;
+        
+        unsigned long lastTime = 0;
+        long initialPos = 0;
+        float lastAngle = 0;
+        bool init = false;
+
+        TwoWire* i2c;  // Pointer to the I2C interface
+
+    public:
+        float angle = 0;
+        float angVel = 0;
+        long currentPos = 0;
+        long lastPos = 0;
+        int delta = 0;
+
+        // Constructor to assign the I2C bus
+        AS5600(TwoWire& wirePort) {
+            i2c = &wirePort;
+        }
+
+        void readAngle() {
+            unsigned long currentTime = micros();
+
+            float dt = (currentTime - lastTime) / pow(10, 6);
+
+            uint8_t lowByte, highByte;
+            i2c->beginTransmission(AS5600_ADDR);
+            i2c->write(ANGLE_REG_LSB);
+            i2c->endTransmission(false);
+            i2c->requestFrom(AS5600_ADDR, (uint8_t) 2);
+
+            if (i2c->available() >= 2) {
+                lowByte = i2c->read();
+                highByte = i2c->read();
+
+                currentPos = (lowByte << 8) | highByte;
+
+                if (!init) {
+                    initialPos = currentPos;
+                    init = true;
+                }
+
+                currentPos -= initialPos;
+                if (currentPos < 0) currentPos += 4096;
+                else if (currentPos >= 4096) currentPos -= 4096;
+
+                delta = currentPos - lastPos;
+                if (delta > 2048) delta -= 4096;
+                else if (delta < -2048) delta += 4096;
+                lastPos = currentPos;
+
+                angle += (float) delta * 2 * PI / 4096;
+                angVel = (angle - lastAngle) / dt;
+                lastAngle = angle;
+
+                lastTime = currentTime;
+            }
+        }
+};
+
+AS5600 encoderR(Wire);
+AS5600 encoderL(I2C_2);
+
 void setup() {
     Serial.begin(115200);
     Serial.println("Balancing Robot Initialization...");
@@ -71,9 +127,6 @@ void setup() {
         Serial.println("MPU6050 not found!");
         while (1);
     }
-
-    initialAngleR = readAngle(Wire, AS5600_ADDR, cumulativeAngleR, lastAngleR, initialAngleR);
-    initialAngleL = readAngle(I2C_2, AS5600_ADDR, cumulativeAngleL, lastAngleL, initialAngleL);
 
     Balancer.A << 0, 1, 0, 0,
                   g / L, 0, 0, 0,
@@ -91,7 +144,7 @@ void setup() {
     LQR.Q << 100, 0, 0, 0,
              0, 0.01, 0, 0,
              0, 0, 100, 0,
-             0, 0, 0, 1;
+             0, 0, 0, 10;
 
     LQR.R = 0.01 * MatrixXf::Identity(m, m);
     LQR.x_ref << 0, 0, 0, 0; 
@@ -167,7 +220,7 @@ void loop() {
         Balancer.kalman_filter(y);
 
         // LQR
-        VectorXf x_dev = Balancer.x - LQR.x_ref;
+        VectorXf x_dev = y - LQR.x_ref;
         VectorXf u = -LQR.L*x_dev;
 
         // Save current input for next iteration
@@ -197,40 +250,12 @@ VectorXf ReadIMU(){
 
     // Complementary filter
     float gamma = 0.98;
-    float ang_vel = -(G.gyro.y - gyro_offset);
+    float ang_vel = -1000*(G.gyro.y - gyro_offset);
     gyro_ang += Ts*ang_vel;
     gyro_ang = gamma*gyro_ang + (1 - gamma)*trig_ang;
 
     imu_vals << gyro_ang, ang_vel, trig_ang;
     return imu_vals;
-}
-
-int readAngle(TwoWire &i2c, uint8_t addr, long &cumulativeAngle, int &lastAngle, long &initialAngle) {
-    uint8_t lowByte, highByte;
-
-    // Request 2 bytes of data from the angle register
-    i2c.beginTransmission(addr);
-    i2c.write(ANGLE_REG_LSB);
-    i2c.endTransmission(false);
-    i2c.requestFrom(addr, (uint8_t)2);
-    
-    lowByte = i2c.read();
-    highByte = i2c.read();
-
-    // Little-endian
-    int currentAngle = (lowByte << 8) | highByte;
-
-    int delta = currentAngle - lastAngle;
-    if (delta > 2047) {
-        delta -= 4096;
-    } else if (delta < -2047) {
-        delta += 4096;
-    }
-
-    cumulativeAngle += delta;
-    lastAngle = currentAngle;
-
-    return cumulativeAngle - initialAngle;
 }
 
 void CalibrateIMU(){
@@ -307,34 +332,20 @@ void CalibrateIMU(){
 
 VectorXf CalcX() {
 
-    static float lastRadAngleR = 0;
-    static float lastRadAngleL = 0;
+    encoderR.readAngle();
+    encoderL.readAngle();
+    float angleR = encoderR.angle, angleL = encoderL.angle;
+    float angVelR = encoderR.angVel, angVelL = encoderL.angVel;
 
-    // Read angle for both encoders
-    int angleR = readAngle(Wire, AS5600_ADDR, cumulativeAngleR, lastAngleR, initialAngleR);  // Right encoder
-    int angleL = readAngle(I2C_2, AS5600_ADDR, cumulativeAngleL, lastAngleL, initialAngleL);  // Left encoder
+    float velR = angVelR * r;
+    float velL = -angVelL * r; // Negative sign due to encoder orientation
 
-    float radAngleR = angleR * 2*PI/4096;
-    float radAngleL = angleL * 2*PI/4096;
-
-    float angularVelR = (radAngleR - lastRadAngleR) / Ts;
-    float angularVelL = (radAngleL - lastRadAngleL) / Ts;
-    lastRadAngleR = radAngleR;
-    lastRadAngleL = radAngleL;
-
-    float velR = angularVelR * r;
-    float velL = -angularVelL * r; // Negative sign due to encoder orientation
-
-
-    float x_pos = (radAngleR - radAngleL)*r/2; // Negative sign due to encoder orientation
-
+    float x_pos = (angleR - angleL) * r/2; // Negative sign due to encoder orientation
     float x_vel = (velR + velL) / 2;
-
-    Serial.print("x pos: "); Serial.println(x_pos);
 
     VectorXf x = VectorXf::Zero(2);
     x << x_pos, x_vel;
-    
+
     return x;
 }
 
