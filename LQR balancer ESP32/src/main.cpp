@@ -31,7 +31,7 @@ int p = 4;          // Number of outputs
 float Ts = 0.01;    // Sampling time
 
 // System parameters
-float Kt = 0.01, Rr = 3.5, Rl = 4.5, M = 0.34, L = 0.04, r = 0.055/2, g = 9.82;
+float Kt = 0.005, Rr = 3.5, Rl = 4.5, M = 0.34, L = 0.04, r = 0.055/2, g = 9.82;
 
 // Motor control
 #define AIN1 18     // Direction pin 1
@@ -142,20 +142,20 @@ void setup() {
 
     // Weight Matrices
     LQR.Q << 100, 0, 0, 0,
-             0, 0.01, 0, 0,
+             0, 0.1, 0, 0,
              0, 0, 100, 0,
              0, 0, 0, 10;
 
-    LQR.R = 0.01 * MatrixXf::Identity(m, m);
+    LQR.R = 0.001 * MatrixXf::Identity(m, m);
     LQR.x_ref << 0, 0, 0, 0; 
 
     Balancer.discretize_state_matricies(); // creates A_d and B_d
     LQR.init(Balancer.A_d, Balancer.B_d);
 
-    Balancer.Q << 0.02, 0, 0, 0,
-                  0, 0.02, 0, 0,
-                  0, 0, 10, 0,
-                  0, 0, 0, 10;
+    Balancer.Q << 1, 0, 0, 0,
+                  0, 1, 0, 0,
+                  0, 0, 1, 0,
+                  0, 0, 0, 1;
 
     Balancer.R << 0.01, 0, 0, 0,
                   0, 0.01, 0, 0,
@@ -225,8 +225,8 @@ void loop() {
         Serial.print(Balancer.x(2)); Serial.print(" "); Serial.println(Balancer.x(3));
 
         // LQR
-        VectorXf x_dev = y - LQR.x_ref;
-        VectorXf u = -LQR.L*x_dev;
+        VectorXf x_dev = Balancer.x - LQR.x_ref;
+        VectorXf u = - LQR.L*x_dev;
 
         // Save current input for next iteration
         Balancer.u_prev = u;
@@ -247,20 +247,15 @@ VectorXf ReadIMU(){
 
     static double gyro_ang = 0;
 
-    float x_offset = 0.350, z_offset = 0.387, gyro_offset = -0.035;
+    float x_offset = 0.35, z_offset = 0.387, gyro_offset = 0;
 
     float gravity_x = -a.acceleration.x + x_offset;
     float gravity_z = -a.acceleration.z - z_offset;
     float trig_ang = atan2(gravity_x, gravity_z);
 
     // Complementary filter
-<<<<<<< HEAD
     float gamma = 0.98;
-    float ang_vel = -1000*(G.gyro.y - gyro_offset);
-=======
-    float gamma = 0.99;
     float ang_vel = -(G.gyro.y - gyro_offset);
->>>>>>> 7170e4eaf11bb0657781b245c66fdcafef4ba488
     gyro_ang += Ts*ang_vel;
     gyro_ang = gamma*gyro_ang + (1 - gamma)*trig_ang;
 
@@ -347,27 +342,8 @@ VectorXf CalcX() {
     float angleR = encoderR.angle, angleL = encoderL.angle;
     float angVelR = encoderR.angVel, angVelL = encoderL.angVel;
 
-<<<<<<< HEAD
     float velR = angVelR * r;
     float velL = -angVelL * r; // Negative sign due to encoder orientation
-=======
-    // Read angle for both encoders
-    int angleR = readAngle(Wire, AS5600_ADDR, cumulativeAngleR, lastAngleR, initialAngleR);  // Right encoder
-    int angleL = readAngle(I2C_2, AS5600_ADDR, cumulativeAngleL, lastAngleL, initialAngleL);  // Left encoder
-
-    float radAngleR = angleR * 2*PI/4096;
-    float radAngleL = angleL * 2*PI/4096;
-
-    float angularVelR = (radAngleR - lastRadAngleR) / Ts;
-    float angularVelL = (radAngleL - lastRadAngleL) / Ts;
-    lastRadAngleR = radAngleR;
-    lastRadAngleL = radAngleL;
-
-    float velR = angularVelR * r;
-    float velL = - angularVelL * r; // Negative sign due to encoder orientation
-
-    float x_pos = (radAngleR - radAngleL)*r/2; // Negative sign due to encoder orientation
->>>>>>> 7170e4eaf11bb0657781b245c66fdcafef4ba488
 
     float x_pos = (angleR - angleL) * r/2; // Negative sign due to encoder orientation
     float x_vel = (velR + velL) / 2;
