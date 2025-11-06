@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <Wire.h>
 
+#include "functions.h"
+
 #define SCL_PIN 2
 #define SDA_PIN 3
 
@@ -20,8 +22,9 @@
 #define SERVO3 7
 #define SERVO4 6
 
-void setup() {
+LPfilter voltageFilter(0, 0);
 
+void setup() {
   Serial.begin(115200);
   Wire.begin();
 
@@ -38,12 +41,10 @@ void setup() {
   pinMode(SERVO2, OUTPUT);
   pinMode(SERVO3, OUTPUT);
   pinMode(SERVO4, OUTPUT);
-
-  Serial.println("Started");
-  delay(2000);
 }
 
 void loop() {
-  float current_m1 = analogRead(CURRENT_SEN_M1);
-  Serial.println(current_m1);
+  float vSense = analogRead(INP_VOLTAGE_SENSE);
+  float voltage = voltageFilter.update(20.13*vSense/4096.0);
+  Serial.println(voltage, 1);
 }
