@@ -9,6 +9,8 @@
 #define INP_VOLTAGE_SENSE 10
 #define CURRENT_SEN_M1 5
 #define CURRENT_SEN_M2 4
+#define CURRENT_SEN_M1_OFFSET 1917.3f
+#define CURRENT_SEN_M2_OFFSET 1925.4f
 
 // Motor PWM
 #define PWM1_M1 13
@@ -22,9 +24,19 @@
 #define SERVO3 7
 #define SERVO4 6
 
-LPfilter voltageFilter(0, 0);
+LPfilter voltageFilter(0.99, 0);
+LPfilter currentM1filter(0.95, 0);
+LPfilter currentM2filter(0.95, 0);
 
-void setup() {
+int freq = 200;
+int resolution = 10; // Bits
+int channel1_M1 = 1; int channel2_M1 = 2;
+int channel1_M2 = 3; int channel2_M2 = 4;
+
+PwmMotor Motor1(PWM1_M1, PWM2_M1, channel1_M1, channel2_M1, freq, resolution, false); // Right
+PwmMotor Motor2(PWM1_M2, PWM2_M2, channel1_M2, channel2_M2, freq, resolution, true);  // Left
+
+void setup(){
   Serial.begin(115200);
   Wire.begin();
 
@@ -32,19 +44,31 @@ void setup() {
   pinMode(CURRENT_SEN_M1, INPUT);
   pinMode(CURRENT_SEN_M2, INPUT);
 
-  pinMode(PWM1_M1, OUTPUT);
-  pinMode(PWM2_M1, OUTPUT);
-  pinMode(PWM1_M2, OUTPUT);
-  pinMode(PWM2_M2, OUTPUT);
+  pinMode(PWM1_M1, OUTPUT); pinMode(PWM2_M1, OUTPUT);
+  pinMode(PWM1_M2, OUTPUT); pinMode(PWM2_M2, OUTPUT);
 
   pinMode(SERVO1, OUTPUT);
   pinMode(SERVO2, OUTPUT);
   pinMode(SERVO3, OUTPUT);
   pinMode(SERVO4, OUTPUT);
+
+  Motor1.motorInit();
+  Motor2.motorInit();
 }
 
 void loop() {
   float vSense = analogRead(INP_VOLTAGE_SENSE);
-  float voltage = voltageFilter.update(20.13*vSense/4096.0);
-  Serial.println(voltage, 1);
+  float voltage = voltageFilter.update(1.0875*20.13*vSense/4096);
+
+  float sensitivity = 0.090; // V/A
+  float iSense_M1 = analogRead(CURRENT_SEN_M1);
+  float current_M1 = currentM1filter.update(-3.3*(iSense_M1 - CURRENT_SEN_M1_OFFSET)/(4096*sensitivity));
+
+  float iSense_M2 = analogRead(CURRENT_SEN_M2);
+  float current_M2 = currentM2filter.update(3.3*(iSense_M2 - CURRENT_SEN_M2_OFFSET)/(4096*sensitivity));
+
+  Serial.print(voltage, 1); Serial.print(" "); Serial.print(current_M1); Serial.print(" "); Serial.println(current_M2);
+
+  Motor1.motorWrite(1, true);
+  Motor2.motorWrite(1, true);
 }
