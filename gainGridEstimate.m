@@ -14,7 +14,7 @@ function [A_blend, B_blend, K_blend, w] = gainGridEstimate(y, H, R, x_prev, P_pr
     logL = zeros(n_models, m_models);
 
     % low pass filter
-    alpha = 0.99;
+    alpha = 0.95;
 
     for i = 1:n_models
         for j = 1:m_models
@@ -32,7 +32,7 @@ function [A_blend, B_blend, K_blend, w] = gainGridEstimate(y, H, R, x_prev, P_pr
 
             % Calulate log likelihood
             % Mahalanobis distance => higher likelihood => higher weight
-            % logL = -1/2�(v.'/�S*�v + log(det(S)�)) + length(v)*log(2*pi))
+            % logL = -1/2(v.'/S*v + log(det(S))) + length(v)*log(2*pi))
             % Simplified for computational reasons :)
             logL(i,j) = -0.5*(v.'*(S\v));   % -0.5 * Mahalanobis distance squared, probably close enough
 
