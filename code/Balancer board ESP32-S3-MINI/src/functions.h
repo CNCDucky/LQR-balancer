@@ -21,6 +21,7 @@ class LPfilter {
 
 class PwmMotor {
   private:
+
     int IN1 = 0;
     int IN2 = 0;
     int freq = 200;
@@ -29,6 +30,7 @@ class PwmMotor {
     int resolution = 10; // bits
     int maxDuty = (1 << resolution) - 1; // eg, 1 - 1023 for 10 bit resolution
     bool reverse = false;
+    
   public:
     // Constructor
     PwmMotor(int pin_IN1, int pin_IN2, int pwm_channel1, int pwm_channel2, int pwm_freq, int pwm_resolution, bool reverse_direction){
@@ -86,6 +88,73 @@ class PwmMotor {
       ledcWrite(channel2, 0);
     }
 
+};
+
+class AS5600 {
+    private:
+        uint8_t address = 0x36;
+        uint8_t ANGLE_REG_LSB = 0x0C;
+        uint8_t ANGLE_REG_MSB = 0x0D;
+        
+        unsigned long lastTime = 0;
+        long initialPos = 0;
+        float lastAngle = 0;
+        bool init = false;
+
+        float angle = 0;
+        float angVel = 0;
+        long currentPos = 0;
+        long lastPos = 0;
+        int delta = 0;
+
+        TwoWire* i2c;  // Pointer to the I2C interface
+
+    public:
+
+        // Constructor to assign the I2C bus
+        AS5600(TwoWire& wirePort, uint8_t i2c_address){
+            i2c = &wirePort;
+            address = i2c_address;
+        }
+
+        void readAngle() {
+            unsigned long currentTime = micros();
+
+            float dt = (currentTime - lastTime) / pow(10, 6);
+
+            uint8_t lowByte, highByte;
+            i2c->beginTransmission(address);
+            i2c->write(ANGLE_REG_LSB);
+            i2c->endTransmission(false);
+            i2c->requestFrom(address, (uint8_t) 2);
+
+            if (i2c->available() >= 2) {
+                lowByte = i2c->read();
+                highByte = i2c->read();
+
+                currentPos = (lowByte << 8) | highByte;
+
+                if (!init) {
+                    initialPos = currentPos;
+                    init = true;
+                }
+
+                currentPos -= initialPos;
+                if (currentPos < 0) currentPos += 4096;
+                else if (currentPos >= 4096) currentPos -= 4096;
+
+                delta = currentPos - lastPos;
+                if (delta > 2048) delta -= 4096;
+                else if (delta < -2048) delta += 4096;
+                lastPos = currentPos;
+
+                angle += (float) delta * 2 * PI / 4096;
+                angVel = (angle - lastAngle) / dt;
+                lastAngle = angle;
+
+                lastTime = currentTime;
+            }
+        }
 };
 
 #endif // FUNCTIONS_H

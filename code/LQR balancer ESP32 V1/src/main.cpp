@@ -220,7 +220,7 @@ void loop() {
         // Estimate current states
         Balancer.kalman_filter(y);
 
-        LQR.x_ref << 0, 0, 0, 0; 
+        LQR.x_ref << 0, 0, 0, 0;
 
         Serial.print(Balancer.x(2)); Serial.print(" "); Serial.println(Balancer.x(3));
 

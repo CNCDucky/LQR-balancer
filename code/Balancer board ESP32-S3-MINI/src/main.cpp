@@ -1,7 +1,11 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <Adafruit_MPU6050.h>
 
 #include "functions.h"
+#include "EigenKalman.h"
+#include "EigenLQR.h"
+#include "printLinalg.h"
 
 #define SCL_PIN 2
 #define SDA_PIN 3
@@ -35,8 +39,21 @@ int channel1_M2 = 3; int channel2_M2 = 4;
 
 PwmMotor Motor1(PWM1_M1, PWM2_M1, channel1_M1, channel2_M1, freq, resolution, false); // Right
 PwmMotor Motor2(PWM1_M2, PWM2_M2, channel1_M2, channel2_M2, freq, resolution, true);  // Left
+//
+
+Adafruit_MPU6050 mpu;
+EigenKalmanFilter Kalman;
+EigenLQR LQR;
+AS5600 encoderR(Wire, 0x36);
+
+int n = 4;
+int m = 2;
+int p = 4;
+
 
 void setup(){
+  /////////////////////////////////////////////////////////
+
   Serial.begin(115200);
   Wire.begin();
 
@@ -54,6 +71,42 @@ void setup(){
 
   Motor1.motorInit();
   Motor2.motorInit();
+
+  /////////////////////////////////////////////////////////
+
+  Kalman.A << 0, 0, 0, 0,
+              0, 0, 0, 0,
+              0, 0, 0, 0,
+              0, 0, 0, 0;
+
+  Kalman.B << 0, 0,
+              0, 0,
+              0, 0,
+              0, 0;
+
+  Kalman.C = MatrixXf::Identity(p, p);
+
+  Kalman.Q << 1, 0, 0, 0,
+              0, 1, 0, 0,
+              0, 0, 1, 0,
+              0, 0, 0, 1;
+
+  Kalman.R << 0.01, 0, 0, 0,
+              0, 0.01, 0, 0,
+              0, 0, 0.01, 0,
+              0, 0, 0, 0.01;
+
+  // Weight Matrices
+  LQR.Q << 100, 0, 0, 0,
+           0, 0.1, 0, 0,
+           0, 0, 100, 0,
+           0, 0, 0, 10;
+
+  LQR.R = 0.001 * MatrixXf::Identity(m, m);
+  LQR.x_ref << 0, 0, 0, 0; 
+
+  LQR.init(Kalman.A_d, Kalman.B_d); // TOOD: Make one step Gain Calulation
+
 }
 
 void loop() {
