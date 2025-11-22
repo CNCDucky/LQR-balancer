@@ -3,18 +3,20 @@
 #include <Adafruit_MPU6050.h>
 
 #include "functions.h"
-#include "EigenKalman.h"
-#include "EigenLQR.h"
+#include "StateSpaceModel.h"
 #include "printLinalg.h"
 
 #define SCL_PIN 2
 #define SDA_PIN 3
 
+#define SCL2_PIN 37
+#define SDA2_PIN 38
+
 #define INP_VOLTAGE_SENSE 10
 #define CURRENT_SEN_M1 5
 #define CURRENT_SEN_M2 4
-#define CURRENT_SEN_M1_OFFSET 1917.3f
-#define CURRENT_SEN_M2_OFFSET 1925.4f
+#define CURRENT_SEN_M1_OFFSET 1977.6f
+#define CURRENT_SEN_M2_OFFSET 2218.6f
 
 // Motor PWM
 #define PWM1_M1 13
@@ -39,23 +41,18 @@ int channel1_M2 = 3; int channel2_M2 = 4;
 
 PwmMotor Motor1(PWM1_M1, PWM2_M1, channel1_M1, channel2_M1, freq, resolution, false); // Right
 PwmMotor Motor2(PWM1_M2, PWM2_M2, channel1_M2, channel2_M2, freq, resolution, true);  // Left
-//
-
-Adafruit_MPU6050 mpu;
-EigenKalmanFilter Kalman;
-EigenLQR LQR;
-AS5600 encoderR(Wire, 0x36);
-
-int n = 4;
-int m = 2;
-int p = 4;
-
 
 void setup(){
   /////////////////////////////////////////////////////////
 
   Serial.begin(115200);
-  Wire.begin();
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Wire2.begin(SDA2_PIN, SCL2_PIN);
+
+  if (!mpu.begin()) {
+    Serial.println("MPU6050 not found!");
+    while (1);
+  }
 
   pinMode(INP_VOLTAGE_SENSE, INPUT);
   pinMode(CURRENT_SEN_M1, INPUT);
@@ -69,43 +66,42 @@ void setup(){
   pinMode(SERVO3, OUTPUT);
   pinMode(SERVO4, OUTPUT);
 
+  Motor1.calculateParams(24, 12000*PI/30, 3, 4);
+  Motor2.calculateParams(24, 12000*PI/30, 3, 4);
+
+  // Motor1.setRegulatorParams(float Kp_T_reg, float Ki_T_reg, float Kp_w_reg, float Ki_w_reg);
+  // Motor2.setRegulatorParams(float Kp_T_reg, float Ki_T_reg, float Kp_w_reg, float Ki_w_reg);
+
   Motor1.motorInit();
   Motor2.motorInit();
 
   /////////////////////////////////////////////////////////
 
-  Kalman.A << 0, 0, 0, 0,
-              0, 0, 0, 0,
-              0, 0, 0, 0,
-              0, 0, 0, 0;
+  Model.A_d << 0, 0, 0, 0,
+               0, 0, 0, 0,
+               0, 0, 0, 0,
+               0, 0, 0, 0;
 
-  Kalman.B << 0, 0,
-              0, 0,
-              0, 0,
-              0, 0;
+  Model.B_d << 0,
+               0,
+               0,
+               0;
 
-  Kalman.C = MatrixXf::Identity(p, p);
-
-  Kalman.Q << 1, 0, 0, 0,
+  Model.Q << 1, 0, 0, 0,
               0, 1, 0, 0,
               0, 0, 1, 0,
               0, 0, 0, 1;
-
-  Kalman.R << 0.01, 0, 0, 0,
+  
+  Model.R << 0.01, 0, 0, 0,
               0, 0.01, 0, 0,
               0, 0, 0.01, 0,
               0, 0, 0, 0.01;
 
-  // Weight Matrices
-  LQR.Q << 100, 0, 0, 0,
-           0, 0.1, 0, 0,
-           0, 0, 100, 0,
-           0, 0, 0, 10;
+  // LQR
+  Model.x_ref << 0, 0, 0, 0;
+  Model.K_lqr << 0, 0, 0, 0;
 
-  LQR.R = 0.001 * MatrixXf::Identity(m, m);
-  LQR.x_ref << 0, 0, 0, 0; 
-
-  LQR.init(Kalman.A_d, Kalman.B_d); // TOOD: Make one step Gain Calulation
+  Serial.println("INITIALIZED");
 
 }
 
@@ -122,6 +118,42 @@ void loop() {
 
   Serial.print(voltage, 1); Serial.print(" "); Serial.print(current_M1); Serial.print(" "); Serial.println(current_M2);
 
-  Motor1.motorWrite(1, true);
-  Motor2.motorWrite(1, true);
+  // Motor1.motorWriteSpeed()
+
+  ////////////////////////////////////////////////////////
+
+  unsigned static long lastTime;
+  unsigned long currentTime = millis();
+  static float pos = 0;
+
+  if (currentTime - lastTime >= Model.Ts*1000) {  // Total loop time ~6ms icl serial print
+
+      float dt = (currentTime - lastTime) / pow(10, 3);
+      lastTime = currentTime;
+
+      static VectorXf y_meas = VectorXf::Zero(Model.n);
+
+      // Read sensors
+      VectorXf imu = readMPU(dt);       // angle and angular velocity (rad, rad/s)
+      VectorXf enc = readEncoders(dt);  // position and velocity (m, m/s)
+      y_meas << imu(0), imu(1), enc(0), enc(1);
+
+      // Estimate current states
+      VectorXf x_est = Model.kalmanFilter(y_meas);
+      // Serial.print(y_meas(0)); Serial.print(" "); Serial.println(y_meas(1));
+      // Serial.print(" "); Serial.print(y_meas(2)); Serial.print(" "); Serial.println(y_meas(3));
+
+      // LQR
+      VectorXf x_dev = x_est - Model.x_ref;
+      VectorXf u = - Model.K_lqr*x_dev;
+
+      // Save current input for next iteration
+      Model.u_prev = u;
+
+      // If falling over:
+      if (abs(imu(2)) >= 1){ // rad
+          u = VectorXf::Zero(Model.m);
+      }
+
+    }
 }
