@@ -41,13 +41,14 @@ class PwmMotor {
     float kt = 0;
     float R = 1;
 
-    // Torque control params
-    float Kp_T = 1;
+    // Control params
+    float Kp_T = 10;
     float Ki_T = 0;
-
-    // Angular velocity control params
-    float Kp_w = 1;
+    float Kd_T = 0;
+    float Kp_w = 0.1;
     float Ki_w = 0;
+    float Kd_w = 0;
+    float intLimit = 10;
     
   public:
     // Constructor
@@ -68,7 +69,7 @@ class PwmMotor {
       ledcAttachPin(IN2, channel2);
     }
 
-    void calculateParams(float U_rated, float w_noload, float i_stall, float R_mot) {
+    void calculateParams(float U_rated, float w_noload, float tau_stall, float i_stall, float R_mot) {
       // example:
       // U_rated = 24; // V
       // w_noload = 12000*pi/30; // rad/s
@@ -79,28 +80,40 @@ class PwmMotor {
       R = R_mot;
       // back emf and torque constant approx,
       // If tau_stall is unknown, assume k_e = k_t
-      float ke = U_rated/w_noload;
-      float kt = tau_stall/i_stall;
+      ke = U_rated/w_noload;
+      kt = tau_stall/i_stall;
+
     }
 
-    void setRegulatorParams(float Kp_T_reg, float Ki_T_reg, float Kp_w_reg, float Ki_w_reg) {
-      float Kp_T = Kp_T_reg;
-      float Ki_T = Ki_T_reg;
-      float Kp_w = Kp_w_reg;
-      float Ki_w = Ki_w_reg;
+    void setRegulatorParams(float Kp_T_reg, float Ki_T_reg, float Kd_T_reg, float Kp_w_reg, float Ki_w_reg, float Kd_w_reg) {
+      Kp_T = Kp_T_reg;
+      Ki_T = Ki_T_reg;
+      Kd_T = Kd_T_reg;
+      Kp_w = Kp_w_reg;
+      Ki_w = Ki_w_reg;
+      Kd_w = Kd_w_reg;
     }
 
     void motorWriteTorque(float tau_ref, float Vin, float i_mot, float phi, float dt) {
 
       static float int_i_err = 0;
+      static float prev_i_err = 0;
+      static float alpha = 0.8;
 
       float i_ref = tau_ref/kt;
       float V_drop = R*i_ref + ke*phi;
-      float i_err = i_ref - i_mot;
-      int_i_err += i_err*dt;
+      float i_err = alpha*prev_i_err + (1-alpha)*(i_ref - i_mot);
 
-      float V_corr = Kp_T*i_err + Ki_T*int_i_err;
+      int_i_err += i_err*dt;
+      if (int_i_err > intLimit) int_i_err = intLimit;
+      if (int_i_err < -intLimit) int_i_err = -intLimit;
+
+      float V_corr = Kp_T*i_err + Ki_T*int_i_err + Kd_T*(i_err - prev_i_err)/dt;
+      prev_i_err = i_err;
+
       float V_cmd = V_drop + V_corr;
+
+      Serial.println(i_err);
 
       // Convert to dutycycle
       float dutycycle = V_cmd/Vin;
@@ -113,12 +126,21 @@ class PwmMotor {
     void motorWriteSpeed(float phi_ref, float Vin, float phi, float dt) {
 
       static float int_w_err = 0;
+      static float prev_w_err = 0;
+      static float alpha = 0.5;
 
       // Speed error
-      float w_err = phi_ref - phi;
-      int_w_err += w_err * dt;
-      float i_ref = Kp_w*w_err + Ki_w*int_w_err;
+      float w_err = alpha*prev_w_err + (1-alpha)*(phi_ref - phi);
+      int_w_err += w_err*dt;
+      float i_ref = Kp_w*w_err + Ki_w*int_w_err - Kd_w*(w_err - prev_w_err)/dt;
+      prev_w_err = w_err;
+
       float V_cmd = R*i_ref + ke*phi;
+
+      if (int_w_err > intLimit) int_w_err = intLimit;
+      if (int_w_err < -intLimit) int_w_err = -intLimit;
+
+      Serial.println(w_err);
 
       // Convert to duty cycle
       float dutycycle = V_cmd / Vin;
@@ -130,8 +152,8 @@ class PwmMotor {
 
     void motorWrite(float dutycycle){
 
+      bool forward = true;
       if (dutycycle < 0) forward = false;
-      else forward = true;
       int duty = round(abs(dutycycle)*maxDuty);
 
       // not reversed
@@ -179,6 +201,7 @@ class AS5600L {
 
     bool init = false;
     float lastAngle = 0;
+    float lastAngVel = 0;
     uint16_t initialPos = 0;
     uint16_t currentPos = 0;
     uint16_t lastPos = 0;
@@ -207,7 +230,7 @@ class AS5600L {
         uint8_t highByte = i2c->read();
         uint8_t lowByte = i2c->read();
 
-        currentPos = (lowByte << 8) | highByte;;  // 12-bit mask
+        currentPos = (lowByte << 8) | highByte;
 
         if (!init) {
           initialPos = currentPos;
@@ -220,10 +243,12 @@ class AS5600L {
         else if (delta < -2048) delta += 4096;
 
         lastPos = currentPos;
-
-        angle += (float) delta * 2.0f * PI / 4096.0f;  // convert counts to radians
-        angVel = (angle - lastAngle) / dt;
+        
+        float alpha = 0.9;
+        angle += delta * 2*PI/4096;
+        angVel = alpha*lastAngVel + (1-alpha)*(angle - lastAngle) / dt;
         lastAngle = angle;
+        lastAngVel = angVel;
       }
     }
 };
@@ -277,7 +302,7 @@ VectorXf readMPU(float dt){
   // Serial.print(gravity_x); Serial.print(" "); Serial.print(gravity_z); Serial.print(" "); Serial.println(G.gyro.y);
 
   // Complementary filter
-  float gamma = 0.98;
+  float gamma = 0.95;
   float ang_vel = -(G.gyro.y - gyro_offset);
   gyro_ang = gamma*(gyro_ang + dt*ang_vel) + (1-gamma)*trig_ang;
 

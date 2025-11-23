@@ -31,8 +31,8 @@
 #define SERVO4 6
 
 LPfilter voltageFilter(0.99, 0);
-LPfilter currentM1filter(0.95, 0);
-LPfilter currentM2filter(0.95, 0);
+LPfilter currentM1filter(0.97, 0);
+LPfilter currentM2filter(0.97, 0);
 
 int freq = 200;
 int resolution = 10; // Bits
@@ -44,10 +44,13 @@ PwmMotor Motor2(PWM1_M2, PWM2_M2, channel1_M2, channel2_M2, freq, resolution, tr
 
 void setup(){
   /////////////////////////////////////////////////////////
-
+  delay(2000);
   Serial.begin(115200);
   Wire.begin(SDA_PIN, SCL_PIN);
   Wire2.begin(SDA2_PIN, SCL2_PIN);
+
+  Wire.setClock(400000);
+  Wire2.setClock(400000);
 
   if (!mpu.begin()) {
     Serial.println("MPU6050 not found!");
@@ -66,11 +69,11 @@ void setup(){
   pinMode(SERVO3, OUTPUT);
   pinMode(SERVO4, OUTPUT);
 
-  Motor1.calculateParams(24, 12000*PI/30, 3, 4);
-  Motor2.calculateParams(24, 12000*PI/30, 3, 4);
+  Motor1.calculateParams(24, 12000*PI/30, 0.7, 3, 4);
+  Motor2.calculateParams(24, 12000*PI/30, 0.7, 3, 4);
 
-  // Motor1.setRegulatorParams(float Kp_T_reg, float Ki_T_reg, float Kp_w_reg, float Ki_w_reg);
-  // Motor2.setRegulatorParams(float Kp_T_reg, float Ki_T_reg, float Kp_w_reg, float Ki_w_reg);
+  Motor1.setRegulatorParams(35, 1, 0.1, 0.1, 0, 0);
+  // Motor2.setRegulatorParams(15, 0, 0.1, 0.01);
 
   Motor1.motorInit();
   Motor2.motorInit();
@@ -101,8 +104,6 @@ void setup(){
   Model.x_ref << 0, 0, 0, 0;
   Model.K_lqr << 0, 0, 0, 0;
 
-  Serial.println("INITIALIZED");
-
 }
 
 void loop() {
@@ -116,19 +117,16 @@ void loop() {
   float iSense_M2 = analogRead(CURRENT_SEN_M2);
   float current_M2 = currentM2filter.update(3.3*(iSense_M2 - CURRENT_SEN_M2_OFFSET)/(4096*sensitivity));
 
-  Serial.print(voltage, 1); Serial.print(" "); Serial.print(current_M1); Serial.print(" "); Serial.println(current_M2);
-
-  // Motor1.motorWriteSpeed()
+  // Serial.print(voltage, 1); Serial.print(" "); Serial.print(current_M1); Serial.print(" "); Serial.println(current_M2);
 
   ////////////////////////////////////////////////////////
 
-  unsigned static long lastTime;
+  unsigned static long lastTime = millis();
   unsigned long currentTime = millis();
-  static float pos = 0;
 
-  if (currentTime - lastTime >= Model.Ts*1000) {  // Total loop time ~6ms icl serial print
+  if (currentTime - lastTime >= Model.Ts*1000) {
 
-      float dt = (currentTime - lastTime) / pow(10, 3);
+      float dt = (currentTime - lastTime)/1000.0f;
       lastTime = currentTime;
 
       static VectorXf y_meas = VectorXf::Zero(Model.n);
@@ -137,6 +135,9 @@ void loop() {
       VectorXf imu = readMPU(dt);       // angle and angular velocity (rad, rad/s)
       VectorXf enc = readEncoders(dt);  // position and velocity (m, m/s)
       y_meas << imu(0), imu(1), enc(0), enc(1);
+
+      Motor1.motorWriteSpeed(6, voltage, encoderR.angVel, dt);
+      // Motor1.motorWriteTorque(0.05, voltage, current_M1, encoderR.angVel, dt);
 
       // Estimate current states
       VectorXf x_est = Model.kalmanFilter(y_meas);
