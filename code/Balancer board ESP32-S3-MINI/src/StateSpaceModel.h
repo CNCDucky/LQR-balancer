@@ -9,20 +9,20 @@ class StateSpaceModel {
 
         // System dimensions (default)
         int n = 4;          // Number of states
-        int m = 1;          // Number of inputs
+        int m = 2;          // Number of inputs
         int p = 4;          // Number of outputs
         float Ts = 0.01;    // Sampling time
 
-        MatrixXf C, A_d, B_d, Kf, I;                // State matricies
+        MatrixXf C, Ad, Bd, Kf, I;                  // State matricies
         MatrixXf Q, R, P, P_prev, P_pred, S;        // Covariances
         VectorXf x, x_prev, x_pred, u_prev, v;      // Inputs and outputs
         VectorXf x_ref;                             // Control parameters
-        RowVectorXf K_lqr;
+        MatrixXf K_lqr;
 
         StateSpaceModel() {
             C.resize(p, n);
-            A_d.resize(n, n);
-            B_d.resize(n, m);
+            Ad.resize(n, n);
+            Bd.resize(n, m);
             Kf.resize(n, p);
             I = MatrixXf::Identity(n, n);
 
@@ -40,14 +40,14 @@ class StateSpaceModel {
             S.resize(p, p);
 
             x_ref.resize(n);
-            K_lqr.resize(1, n);
+            K_lqr.resize(m, n);
         }
 
         VectorXf kalmanFilter(const VectorXf& y_meas){
             // Called each sampling interval Ts
             // Prediction
-            x_pred = A_d*x_prev + B_d*u_prev;
-            P_pred = A_d*P_prev*A_d.transpose() + Q;
+            x_pred = Ad*x_prev + Bd*u_prev;
+            P_pred = Ad*P_prev*Ad.transpose() + Q;
 
             // Measurement update
             S = C*P_pred*C.transpose() + R;

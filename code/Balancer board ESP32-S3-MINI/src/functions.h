@@ -37,8 +37,8 @@ class PwmMotor {
     bool reverse = false;
 
     // motor parameters
-    float ke = 0;
-    float kt = 0;
+    float ke = 0.01;
+    float kt = 0.01;
     float R = 1;
 
     // Control params
@@ -49,7 +49,7 @@ class PwmMotor {
     float Ki_w = 0;
     float Kd_w = 0;
     float intLimit = 10;
-    
+
   public:
     // Constructor
     PwmMotor(int pin_IN1, int pin_IN2, int pwm_channel1, int pwm_channel2, int pwm_freq, int pwm_resolution, bool reverse_direction){
@@ -93,12 +93,12 @@ class PwmMotor {
       Ki_w = Ki_w_reg;
       Kd_w = Kd_w_reg;
     }
-
+    
     void motorWriteTorque(float tau_ref, float Vin, float i_mot, float phi, float dt) {
 
       static float int_i_err = 0;
       static float prev_i_err = 0;
-      static float alpha = 0.8;
+      static float alpha = 0.0;
 
       float i_ref = tau_ref/kt;
       float V_drop = R*i_ref + ke*phi;
@@ -111,9 +111,9 @@ class PwmMotor {
       float V_corr = Kp_T*i_err + Ki_T*int_i_err + Kd_T*(i_err - prev_i_err)/dt;
       prev_i_err = i_err;
 
-      float V_cmd = V_drop + V_corr;
-
       Serial.println(i_err);
+
+      float V_cmd = V_drop + V_corr;
 
       // Convert to dutycycle
       float dutycycle = V_cmd/Vin;
@@ -123,35 +123,24 @@ class PwmMotor {
       motorWrite(dutycycle);
     }
 
-    void motorWriteSpeed(float phi_ref, float Vin, float phi, float dt) {
+    void motorWriteSpeed(float phi_ref, float Vin, float i_mot, float phi, float dt) {
 
       static float int_w_err = 0;
       static float prev_w_err = 0;
-      static float alpha = 0.5;
+      static float alpha = 0.95;
 
-      // Speed error
       float w_err = alpha*prev_w_err + (1-alpha)*(phi_ref - phi);
       int_w_err += w_err*dt;
-      float i_ref = Kp_w*w_err + Ki_w*int_w_err - Kd_w*(w_err - prev_w_err)/dt;
+      float tau_ref = Kp_w*w_err + Ki_w*int_w_err - Kd_w*(w_err - prev_w_err)/dt;
       prev_w_err = w_err;
-
-      float V_cmd = R*i_ref + ke*phi;
 
       if (int_w_err > intLimit) int_w_err = intLimit;
       if (int_w_err < -intLimit) int_w_err = -intLimit;
 
-      Serial.println(w_err);
-
-      // Convert to duty cycle
-      float dutycycle = V_cmd / Vin;
-      if (dutycycle > 1.0f) dutycycle = 1.0f;
-      if (dutycycle < -1.0f) dutycycle = -1.0f;
-
-      motorWrite(dutycycle);
+      motorWriteTorque(tau_ref, Vin, i_mot, phi, dt);
     }
 
     void motorWrite(float dutycycle){
-
       bool forward = true;
       if (dutycycle < 0) forward = false;
       int duty = round(abs(dutycycle)*maxDuty);
@@ -244,7 +233,7 @@ class AS5600L {
 
         lastPos = currentPos;
         
-        float alpha = 0.9;
+        float alpha = 0.75;
         angle += delta * 2*PI/4096;
         angVel = alpha*lastAngVel + (1-alpha)*(angle - lastAngle) / dt;
         lastAngle = angle;
@@ -255,23 +244,23 @@ class AS5600L {
 
 
 TwoWire Wire2 = TwoWire(1);
-AS5600L encoderR(Wire, 0x40);
-AS5600L encoderL(Wire2, 0x40);
+AS5600L encoderL(Wire, 0x40);
+AS5600L encoderR(Wire2, 0x40);
 
 VectorXf readEncoders(float dt) {
 
   float r = 0.025;
 
-  encoderR.readAngle(dt);
   encoderL.readAngle(dt);
-  float angleR = encoderR.angle, angleL = encoderL.angle;
-  float angVelR = encoderR.angVel, angVelL = encoderL.angVel;
+  encoderR.readAngle(dt);
+  float angleL = encoderL.angle, angleR = encoderR.angle;
+  float angVelL = encoderL.angVel, angVelR = encoderR.angVel;
 
-  float velR = angVelR * r;
-  float velL = angVelL * r;
+  float velL = angVelL*r;
+  float velR = angVelR*r;
 
-  float x_pos = (angleR + angleL) * r/2;
-  float x_vel = (velR + velL) / 2;
+  float x_pos = (angleR + angleL)*r/2;
+  float x_vel = (velR + velL)/2;
 
   VectorXf x = VectorXf::Zero(2);
   x << x_pos, x_vel;
@@ -306,7 +295,7 @@ VectorXf readMPU(float dt){
   float ang_vel = -(G.gyro.y - gyro_offset);
   gyro_ang = gamma*(gyro_ang + dt*ang_vel) + (1-gamma)*trig_ang;
 
-  imu_vals << gyro_ang, ang_vel, trig_ang;
+  imu_vals << -gyro_ang, -ang_vel, -trig_ang;
   return imu_vals;
 
 }

@@ -39,8 +39,8 @@ int resolution = 10; // Bits
 int channel1_M1 = 1; int channel2_M1 = 2;
 int channel1_M2 = 3; int channel2_M2 = 4;
 
-PwmMotor Motor1(PWM1_M1, PWM2_M1, channel1_M1, channel2_M1, freq, resolution, false); // Right
-PwmMotor Motor2(PWM1_M2, PWM2_M2, channel1_M2, channel2_M2, freq, resolution, true);  // Left
+PwmMotor Motor1(PWM1_M1, PWM2_M1, channel1_M1, channel2_M1, freq, resolution, false); // Left
+PwmMotor Motor2(PWM1_M2, PWM2_M2, channel1_M2, channel2_M2, freq, resolution, true);  // Right
 
 void setup(){
   /////////////////////////////////////////////////////////
@@ -69,40 +69,42 @@ void setup(){
   pinMode(SERVO3, OUTPUT);
   pinMode(SERVO4, OUTPUT);
 
-  Motor1.calculateParams(24, 12000*PI/30, 0.7, 3, 4);
-  Motor2.calculateParams(24, 12000*PI/30, 0.7, 3, 4);
+  // TODO: MEASURE MOTOR RESISTANCE!!!
+  Motor1.calculateParams(8, 8000*PI/30, 0.7, 3, 4);
+  Motor2.calculateParams(8, 8000*PI/30, 0.7, 3, 4);
 
-  Motor1.setRegulatorParams(35, 1, 0.1, 0.1, 0, 0);
-  // Motor2.setRegulatorParams(15, 0, 0.1, 0.01);
+  Motor1.setRegulatorParams(15, 0, 0, 0.03, 0, 0);
+  Motor2.setRegulatorParams(15, 0, 0, 0.03, 0, 0);
 
   Motor1.motorInit();
   Motor2.motorInit();
 
   /////////////////////////////////////////////////////////
 
-  Model.A_d << 0, 0, 0, 0,
-               0, 0, 0, 0,
-               0, 0, 0, 0,
-               0, 0, 0, 0;
+  Model.Ad << 1, -0.000122881, 0.0100099, -4.08979e-07,
+              0, 1.02053, -0.00198484, 0.0100683,
+              0, -0.024668, 1.00199, -0.000122881,
+              0, 4.12202, -0.398451, 1.02053;
 
-  Model.B_d << 0,
-               0,
-               0,
-               0;
+  Model.Bd << 0.0183257, 0.0183257,
+              -1.72868, -1.72868,
+              3.67338, 3.67338,
+              -347.156, -347.156;
 
-  Model.Q << 1, 0, 0, 0,
-              0, 1, 0, 0,
-              0, 0, 1, 0,
-              0, 0, 0, 1;
+  Model.Q << 0.05, 0, 0, 0,
+             0, 0.05, 0, 0,
+             0, 0, 0.05, 0,
+             0, 0, 0, 0.05;
   
-  Model.R << 0.01, 0, 0, 0,
-              0, 0.01, 0, 0,
-              0, 0, 0.01, 0,
-              0, 0, 0, 0.01;
+  Model.R << 0.05, 0, 0, 0,
+             0, 0.05, 0, 0,
+             0, 0, 0.05, 0,
+             0, 0, 0, 0.05;
 
   // LQR
   Model.x_ref << 0, 0, 0, 0;
-  Model.K_lqr << 0, 0, 0, 0;
+  Model.K_lqr << -0.00111299, -0.045214, -0.00313631, -0.00399954,
+                 -0.001113, -0.045214, -0.00313631, -0.00399954;
 
 }
 
@@ -134,27 +136,27 @@ void loop() {
       // Read sensors
       VectorXf imu = readMPU(dt);       // angle and angular velocity (rad, rad/s)
       VectorXf enc = readEncoders(dt);  // position and velocity (m, m/s)
-      y_meas << imu(0), imu(1), enc(0), enc(1);
-
-      Motor1.motorWriteSpeed(6, voltage, encoderR.angVel, dt);
-      // Motor1.motorWriteTorque(0.05, voltage, current_M1, encoderR.angVel, dt);
+      y_meas << enc(0), imu(0), enc(1), imu(1);
 
       // Estimate current states
       VectorXf x_est = Model.kalmanFilter(y_meas);
-      // Serial.print(y_meas(0)); Serial.print(" "); Serial.println(y_meas(1));
+      // Serial.print(y_meas(0)); Serial.print(" "); Serial.print(y_meas(1));
       // Serial.print(" "); Serial.print(y_meas(2)); Serial.print(" "); Serial.println(y_meas(3));
 
       // LQR
       VectorXf x_dev = x_est - Model.x_ref;
-      VectorXf u = - Model.K_lqr*x_dev;
+      VectorXf tau_ref = - Model.K_lqr*y_meas;
 
       // Save current input for next iteration
-      Model.u_prev = u;
+      Model.u_prev = tau_ref;
 
-      // If falling over:
-      if (abs(imu(2)) >= 1){ // rad
-          u = VectorXf::Zero(Model.m);
+      if (abs(imu(0)) >= 1) {
+        Motor1.motorDisable();
+        Motor2.motorDisable();
       }
-
+      else {
+        Motor1.motorWriteTorque(tau_ref(0), voltage, current_M1, encoderL.angVel, dt);
+        Motor2.motorWriteTorque(tau_ref(1), voltage, current_M2, encoderR.angVel, dt);
+      }
     }
 }
