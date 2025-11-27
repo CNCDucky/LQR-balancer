@@ -70,26 +70,26 @@ void setup(){
   pinMode(SERVO4, OUTPUT);
 
   // TODO: MEASURE MOTOR RESISTANCE!!!
-  Motor1.calculateParams(8, 8000*PI/30, 0.7, 3, 4);
-  Motor2.calculateParams(8, 8000*PI/30, 0.7, 3, 4);
+  Motor1.calculateParams(24, 12000*PI/30, 0.025, 3, 4);
+  Motor2.calculateParams(24, 12000*PI/30, 0.025, 3, 4);
 
-  Motor1.setRegulatorParams(15, 0, 0, 0.03, 0, 0);
-  Motor2.setRegulatorParams(15, 0, 0, 0.03, 0, 0);
+  Motor1.setRegulatorParams(3, 0, 0, 0.04, 0, 0);
+  Motor2.setRegulatorParams(3, 0, 0, 0.04, 0, 0);
 
   Motor1.motorInit();
   Motor2.motorInit();
 
   /////////////////////////////////////////////////////////
 
-  Model.Ad << 1, -0.000122881, 0.0100099, -4.08979e-07,
-              0, 1.02053, -0.00198484, 0.0100683,
-              0, -0.024668, 1.00199, -0.000122881,
-              0, 4.12202, -0.398451, 1.02053;
+  Model.Ad << 1, -0.000111544, 0.0100045, -3.71488e-07,
+              0, 1.01208, -0.000684387, 0.0100402,
+              0, -0.0223569, 1.0009, -0.000111544,
+              0, 2.42036, -0.137172, 1.01208;
 
-  Model.Bd << 0.0183257, 0.0183257,
-              -1.72868, -1.72868,
-              3.67338, 3.67338,
-              -347.156, -347.156;
+  Model.Bd << 0.0136158, 0.0136158,
+             -0.673956, -0.673956,
+              2.72606, 2.72606,
+             -135.124, -135.124;
 
   Model.Q << 0.05, 0, 0, 0,
              0, 0.05, 0, 0,
@@ -103,8 +103,8 @@ void setup(){
 
   // LQR
   Model.x_ref << 0, 0, 0, 0;
-  Model.K_lqr << -0.00111299, -0.045214, -0.00313631, -0.00399954,
-                 -0.001113, -0.045214, -0.00313631, -0.00399954;
+  Model.K_lqr << -0.0113944, -0.0286112, -0.0118587, -0.00409191,
+                 -0.0113944, -0.0286112, -0.0118587, -0.00409191;
 
 }
 
@@ -140,8 +140,8 @@ void loop() {
 
       // Estimate current states
       VectorXf x_est = Model.kalmanFilter(y_meas);
-      // Serial.print(y_meas(0)); Serial.print(" "); Serial.print(y_meas(1));
-      // Serial.print(" "); Serial.print(y_meas(2)); Serial.print(" "); Serial.println(y_meas(3));
+      Serial.print(y_meas(0)); Serial.print(" "); Serial.print(y_meas(1));
+      Serial.print(" "); Serial.print(y_meas(2)); Serial.print(" "); Serial.println(y_meas(3));
 
       // LQR
       VectorXf x_dev = x_est - Model.x_ref;
@@ -149,6 +149,8 @@ void loop() {
 
       // Save current input for next iteration
       Model.u_prev = tau_ref;
+
+      //Motor1.motorWriteTorque(0.01, voltage, current_M1, encoderL.angVel, dt);
 
       if (abs(imu(0)) >= 1) {
         Motor1.motorDisable();

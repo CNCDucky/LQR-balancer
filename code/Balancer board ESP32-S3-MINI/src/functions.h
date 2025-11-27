@@ -48,7 +48,7 @@ class PwmMotor {
     float Kp_w = 0.1;
     float Ki_w = 0;
     float Kd_w = 0;
-    float intLimit = 10;
+    float intLimit = 1;
 
   public:
     // Constructor
@@ -98,7 +98,7 @@ class PwmMotor {
 
       static float int_i_err = 0;
       static float prev_i_err = 0;
-      static float alpha = 0.0;
+      static float alpha = 0;
 
       float i_ref = tau_ref/kt;
       float V_drop = R*i_ref + ke*phi;
@@ -111,7 +111,7 @@ class PwmMotor {
       float V_corr = Kp_T*i_err + Ki_T*int_i_err + Kd_T*(i_err - prev_i_err)/dt;
       prev_i_err = i_err;
 
-      Serial.println(i_err);
+      // Serial.println(i_err);
 
       float V_cmd = V_drop + V_corr;
 
@@ -233,7 +233,7 @@ class AS5600L {
 
         lastPos = currentPos;
         
-        float alpha = 0.75;
+        float alpha = 0;
         angle += delta * 2*PI/4096;
         angVel = alpha*lastAngVel + (1-alpha)*(angle - lastAngle) / dt;
         lastAngle = angle;
@@ -272,7 +272,7 @@ VectorXf readMPU(float dt){
 
   static bool init = false;
   if (init == false) {
-    mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+    //mpu.setGyroRange(MPU6050_RANGE_500_DEG);
     init = true;
   }
 
@@ -282,7 +282,7 @@ VectorXf readMPU(float dt){
 
   static float gyro_ang = 0;
 
-  float x_offset = -0.2622, z_offset = -0.1788, gyro_offset = 0;
+  float x_offset = 0.4, z_offset = -0.1788, gyro_offset = 0;
 
   float gravity_x = -a.acceleration.x - x_offset;
   float gravity_z = -a.acceleration.z - z_offset;
@@ -291,7 +291,7 @@ VectorXf readMPU(float dt){
   // Serial.print(gravity_x); Serial.print(" "); Serial.print(gravity_z); Serial.print(" "); Serial.println(G.gyro.y);
 
   // Complementary filter
-  float gamma = 0.95;
+  float gamma = 0.99;
   float ang_vel = -(G.gyro.y - gyro_offset);
   gyro_ang = gamma*(gyro_ang + dt*ang_vel) + (1-gamma)*trig_ang;
 
