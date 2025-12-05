@@ -39,7 +39,7 @@ class PwmMotor {
     // motor parameters
     float ke = 0.01;
     float kt = 0.01;
-    float R = 1;
+    float R = 3;
 
     // Control params
     float Kp_T = 10;
@@ -82,7 +82,6 @@ class PwmMotor {
       // If tau_stall is unknown, assume k_e = k_t
       ke = U_rated/w_noload;
       kt = tau_stall/i_stall;
-
     }
 
     void setRegulatorParams(float Kp_T_reg, float Ki_T_reg, float Kd_T_reg, float Kp_w_reg, float Ki_w_reg, float Kd_w_reg) {
@@ -98,8 +97,7 @@ class PwmMotor {
 
       static float int_i_err = 0;
       static float prev_i_err = 0;
-      static float alpha = 0;
-
+      static float alpha = 0.85;
       float i_ref = tau_ref/kt;
       float V_drop = R*i_ref + ke*phi;
       float i_err = alpha*prev_i_err + (1-alpha)*(i_ref - i_mot);
@@ -111,7 +109,7 @@ class PwmMotor {
       float V_corr = Kp_T*i_err + Ki_T*int_i_err + Kd_T*(i_err - prev_i_err)/dt;
       prev_i_err = i_err;
 
-      // Serial.println(i_err);
+      Serial.println(i_err);
 
       float V_cmd = V_drop + V_corr;
 
@@ -234,7 +232,7 @@ class AS5600L {
         lastPos = currentPos;
         
         float alpha = 0;
-        angle += delta * 2*PI/4096;
+        angle += delta*2*PI/4096;
         angVel = alpha*lastAngVel + (1-alpha)*(angle - lastAngle) / dt;
         lastAngle = angle;
         lastAngVel = angVel;
@@ -281,19 +279,21 @@ VectorXf readMPU(float dt){
   mpu.getEvent(&a, &G, &temp);
 
   static float gyro_ang = 0;
-
-  float x_offset = 0.4, z_offset = -0.1788, gyro_offset = 0;
+  float x_offset = -0.3040, z_offset = 0.1, gyro_offset = 0;
 
   float gravity_x = -a.acceleration.x - x_offset;
   float gravity_z = -a.acceleration.z - z_offset;
   float trig_ang = atan2(gravity_x, gravity_z);
 
-  // Serial.print(gravity_x); Serial.print(" "); Serial.print(gravity_z); Serial.print(" "); Serial.println(G.gyro.y);
-
   // Complementary filter
-  float gamma = 0.99;
+  float gamma = 0.95;
   float ang_vel = -(G.gyro.y - gyro_offset);
   gyro_ang = gamma*(gyro_ang + dt*ang_vel) + (1-gamma)*trig_ang;
+
+  //Serial.print(gravity_x); 
+  //Serial.print(" "); Serial.print(gravity_z);
+  //Serial.print(" "); Serial.print(trig_ang);
+  //Serial.print(" "); Serial.println(gyro_ang);
 
   imu_vals << -gyro_ang, -ang_vel, -trig_ang;
   return imu_vals;

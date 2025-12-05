@@ -31,8 +31,8 @@
 #define SERVO4 6
 
 LPfilter voltageFilter(0.99, 0);
-LPfilter currentM1filter(0.97, 0);
-LPfilter currentM2filter(0.97, 0);
+LPfilter currentM1filter(0.25, 0);
+LPfilter currentM2filter(0.25, 0);
 
 int freq = 200;
 int resolution = 10; // Bits
@@ -70,11 +70,11 @@ void setup(){
   pinMode(SERVO4, OUTPUT);
 
   // TODO: MEASURE MOTOR RESISTANCE!!!
-  Motor1.calculateParams(24, 12000*PI/30, 0.025, 3, 4);
-  Motor2.calculateParams(24, 12000*PI/30, 0.025, 3, 4);
+  Motor1.calculateParams(7.45, 6500*PI/30, 0.015, 1.05, 3);
+  Motor2.calculateParams(7.45, 6500*PI/30, 0.015, 1.05, 4);
 
-  Motor1.setRegulatorParams(3, 0, 0, 0.04, 0, 0);
-  Motor2.setRegulatorParams(3, 0, 0, 0.04, 0, 0);
+  Motor1.setRegulatorParams(10, 0, 0, 0.05, 0, 0);
+  Motor2.setRegulatorParams(10, 0, 0, 0.05, 0, 0);
 
   Motor1.motorInit();
   Motor2.motorInit();
@@ -103,14 +103,14 @@ void setup(){
 
   // LQR
   Model.x_ref << 0, 0, 0, 0;
-  Model.K_lqr << -0.0113944, -0.0286112, -0.0118587, -0.00409191,
-                 -0.0113944, -0.0286112, -0.0118587, -0.00409191;
+  Model.K_lqr << -0.0349364, -0.0518218, -0.0276736, -0.00452262,
+                 -0.0349364, -0.0518218, -0.0276736, -0.00452262;
 
 }
 
 void loop() {
   float vSense = analogRead(INP_VOLTAGE_SENSE);
-  float voltage = voltageFilter.update(1.0875*20.13*vSense/4096);
+  float voltage = voltageFilter.update(1.0*20.13*vSense/4096);
 
   float sensitivity = 0.090; // V/A
   float iSense_M1 = analogRead(CURRENT_SEN_M1);
@@ -140,8 +140,10 @@ void loop() {
 
       // Estimate current states
       VectorXf x_est = Model.kalmanFilter(y_meas);
-      Serial.print(y_meas(0)); Serial.print(" "); Serial.print(y_meas(1));
-      Serial.print(" "); Serial.print(y_meas(2)); Serial.print(" "); Serial.println(y_meas(3));
+      //Serial.print(y_meas(0)); 
+      //Serial.print(" "); Serial.print(y_meas(1));
+      //Serial.print(" "); Serial.print(y_meas(2));
+      //Serial.print(" "); Serial.println(y_meas(3));
 
       // LQR
       VectorXf x_dev = x_est - Model.x_ref;
@@ -150,9 +152,9 @@ void loop() {
       // Save current input for next iteration
       Model.u_prev = tau_ref;
 
-      //Motor1.motorWriteTorque(0.01, voltage, current_M1, encoderL.angVel, dt);
+      // Motor1.motorWriteTorque(0.02, voltage, current_M1, encoderL.angVel, dt);
 
-      if (abs(imu(0)) >= 1) {
+      if (abs(imu(2)) >= 1) {
         Motor1.motorDisable();
         Motor2.motorDisable();
       }
